@@ -191,16 +191,20 @@ verifyExpr m x@(RegisterAccess{}) = verifyRegAccess m x
 
 verifyExpr m (Var varName) = findTypeWithinScope varName m
 
+verifyGateBody :: Monad m => (Id -> EvaluationContext -> m TermType) -> (EvaluationContext -> Expression -> m TermType) -> (LineNumber -> TermType -> [TermType] -> [Expression] -> m TermType) -> EvaluationContext -> GateApp -> m TermType
+
+verifyGateBody calcTypeOfGate calcExprType gateAppVerifier m (GateApp gateName@(WithContext _ line) args) =
+  do
+  expectedTypes <- calcTypeOfGate gateName m
+  actualTypes <- traverse (calcExprType m) args
+  gateAppVerifier line expectedTypes actualTypes args
+
 -- Takes the current context, the application of a gate, and
 -- verifies if the application is valid under the given context.
 -- Returns the type of the application if so. Returns an error otherwise.
 verifyGateApp :: EvaluationContext -> GateApp -> TypeCalculationResult
 
-verifyGateApp m (GateApp gateName@(WithContext _ line) args) = do
-  expectedTypes <- findGateType gateName m
-  actualTypes <- traverse (verifyExpr m) args
-  verifyGateArgs line expectedTypes actualTypes args
-  where
+verifyGateApp m gt@(GateApp{}) = verifyGateBody findGateType verifyExpr verifyGateArgs m gt
 
 verifyGateApp m (GateSequence a b)
   = verifyGateApp m a *> verifyGateApp m b
@@ -354,10 +358,10 @@ ensureM predicate errFn x = predicate x >>= bool (errFn x & throwError) (return 
 -- the index variables currently in-scope,
 -- a parametric expression, and returns the type of the expression if it is
 -- valid. Returns an error otherwise
-verifyParametricExpr :: EvaluationContext -> [IndexVar] -> Expression -> TypeCalculationResult'
-verifyParametricExpr m _ x@(Var{})  = verifyExpr' m x
+verifyParametricExpr :: [IndexVar] -> EvaluationContext ->  Expression -> TypeCalculationResult'
+verifyParametricExpr _ m x@(Var{})  = verifyExpr' m x
 
-verifyParametricExpr m validIdxVars (RegisterAccess registerName@(WithContext _ line) registerNumber)
+verifyParametricExpr validIdxVars m (RegisterAccess registerName@(WithContext _ line) registerNumber)
   = checkNoFreeIdxVarsAreUsed registerNumber validIdxVars
   *> findTypeWithinScope' registerName m
   >>= ensureM (isRegColl >>> return) (genExpectedRegCollErr registerName line)
@@ -450,12 +454,18 @@ verifyParametricGateApp validIdxVars = verifyGateApplication genUnexpectedNumOfA
 -- gate body has an invalid type. Returns the overall type of the gate otherwise
 verifyParametricGateBody ::[IndexVar] -> GateApp  -> EvaluationContext  -> TypeCalculationResult'
 
-verifyParametricGateBody validIdxVars GateApp{gateId, gateArgs} m = do
-  expectedTypes <- findGateType' gateId m
-  actualTypes <- traverse (verifyParametricExpr m validIdxVars) gateArgs
-  verifyParametricGateApp validIdxVars (extractCtx gateId) expectedTypes actualTypes gateArgs
+
+verifyParametricGateBody validIdxVars gt@(GateApp{}) m=
+  verifyGateBody findGateType' (verifyParametricExpr validIdxVars) (verifyParametricGateApp validIdxVars) m gt
   where
     findGateType' a = findGateType a >>> fromEither
+
+--verifyParametricGateBody validIdxVars GateApp{gateId, gateArgs} m = do
+--  expectedTypes <- findGateType' gateId m
+--  actualTypes <- traverse (verifyParametricExpr validIdxVars m) gateArgs
+--  verifyParametricGateApp validIdxVars (extractCtx gateId) expectedTypes actualTypes gateArgs
+--  where
+--    findGateType' a = findGateType a >>> fromEither
 
 verifyParametricGateBody validIdxVars (GateSequence fstGate sndGate) m =
   verifyParametricGateBody validIdxVars fstGate m *> verifyParametricGateBody validIdxVars sndGate m
