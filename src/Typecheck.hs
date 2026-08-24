@@ -46,8 +46,8 @@ import qualified Grisette as G
 import Data.String(fromString)
 import Control.Monad.Except(ExceptT(..), MonadError(..))
 import Data.Generics.Product (position)
-import Control.Monad.Extra(allM)
-import Control.Monad(mapM_)
+import Control.Monad.Extra(allM, andM)
+import Control.Monad(mapM_, zipWithM)
 import Data.Tuple.Extra(uncurry3)
 
 -- This data type represents the context under which to evaluate
@@ -162,16 +162,34 @@ findTypeMismatch actualArgs expectedArgTypes actualArgTypes =
     erroneousTerm = actualArgs !! mismatchIdx
 
 
--- Takes the expected and actual argument types to a gate and
--- returns true if the expected types correspond to the actual types.
--- Returns false otherwise
-isValidGateApp :: [TermType] -> [TermType] -> Bool
-isValidGateApp expectedArgTypes  = zip expectedArgTypes >>> all (uncurry isSupertypeOf)
+
+-- Takes the expected and actual argument types to a gate, the
+-- actual arguments, the line the gate was applied,
+-- and returns the type of the application
+-- if the expected types correspond to the actual types.
+-- Returns an error otherwise
+isValidGateApp' :: [TermType] -> [TermType] -> [Expression] -> LineNumber -> TypeCalculationResult
+isValidGateApp' expectedArgTypes  actualArgTypes actualArgs line = (zip3 expectedArgTypes actualArgTypes actualArgs & allM (uncurry3 isSupertypeOf)) $> Unit
   where
-    isSupertypeOf :: TermType -> TermType -> Bool
-    isSupertypeOf (RegisterGroup collTy expectedNumOfRegs) (RegisterGroup collTy' actualNumOfRegs) = collTy == collTy' &&  expectedNumOfRegs <= actualNumOfRegs
-    isSupertypeOf (Circuit left) (Circuit right) = all id (zipWith isSupertypeOf right left)
-    isSupertypeOf x y = x == y
+    isSupertypeOf :: TermType -> TermType -> Expression -> Either TypeErrAt Bool
+    isSupertypeOf expectedTyp@(RegisterGroup collTy expectedNumOfRegs) actualTyp@(RegisterGroup collTy' actualNumOfRegs) actualRegColl = bool (toTypMisMatch expectedTyp actualTyp actualRegColl) (Right True) $ collTy == collTy' &&  expectedNumOfRegs <= actualNumOfRegs
+    isSupertypeOf (Circuit left) (Circuit right) args' = andM  (zipWithM isSupertypeOf right left args')
+    isSupertypeOf x y actualArg = bool (toTypMisMatch x y actualArg) (Right True) $  x == y
+    toTypMisMatch expectedTyp actualTyp actualArg = TypeMismatch expectedTyp actualTyp actualArg & flip toTypeErrAtLoc line
+
+
+verifyGateApplication :: Monad m => (LineNumber -> Int -> Int -> m TermType) -> ([TermType] -> [TermType] -> [Expression] -> LineNumber -> m TermType) -> LineNumber -> TermType -> [TermType] -> [Expression] -> m TermType
+
+verifyGateApplication unexpectedNumOfParamsErrFn validAppCheckerFn line (Circuit expectedArgTypes) actualArgTypes args
+  | gateIsAppliedToTooManyArgs = unexpectedNumOfArgsErr
+  | gateIsAppliedToTooFewArgs = unexpectedNumOfArgsErr
+  | otherwise = validAppCheckerFn expectedArgTypes actualArgTypes args line
+  where
+    numOfExpectedTypes = length expectedArgTypes
+    numOfActualTypes = length actualArgTypes
+    gateIsAppliedToTooManyArgs = numOfExpectedTypes < numOfActualTypes
+    gateIsAppliedToTooFewArgs = numOfExpectedTypes > numOfActualTypes
+    unexpectedNumOfArgsErr =  unexpectedNumOfParamsErrFn line numOfExpectedTypes numOfActualTypes
 
 -- Takes the line where a gate was applied,
 -- the types of the expected arguments for a gate,
@@ -180,18 +198,17 @@ isValidGateApp expectedArgTypes  = zip expectedArgTypes >>> all (uncurry isSuper
 -- expected and actual types match. Returns an error otherwise
 verifyGateArgs :: LineNumber -> TermType -> [TermType] -> [Expression] -> TypeCalculationResult
 
+
 verifyGateArgs line (Circuit expectedArgTypes) actualArgTypes args
   | gateIsAppliedToTooManyArgs = unexpectedNumOfArgsErr
   | gateIsAppliedToTooFewArgs = unexpectedNumOfArgsErr
-  | isValidGateApp expectedArgTypes actualArgTypes  = Right Unit
-  | otherwise = gateArgMismatchErr
+  | otherwise = isValidGateApp' expectedArgTypes actualArgTypes args line
   where
     numOfExpectedTypes = length expectedArgTypes
     numOfActualTypes = length actualArgTypes
     gateIsAppliedToTooManyArgs = numOfExpectedTypes < numOfActualTypes
     gateIsAppliedToTooFewArgs = numOfExpectedTypes > numOfActualTypes
     unexpectedNumOfArgsErr =  genUnexpectedNumOfArgsErr line numOfExpectedTypes numOfActualTypes
-    gateArgMismatchErr = toTypeErrAtLoc (findTypeMismatch args expectedArgTypes actualArgTypes) line
 
 
 -- Takes the current context, an expression, and calculates its type
