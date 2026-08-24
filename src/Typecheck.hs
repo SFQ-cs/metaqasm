@@ -38,8 +38,7 @@ import Vary (Vary)
 import qualified Vary
 import Data.Function ((&), on)
 import Data.Functor(($>))
-import Data.List(findIndex, find, nub)
-import Data.Maybe(fromJust)
+import Data.List(find, nub)
 import qualified Control.Lens as L hiding (Control.Lens.Index)
 import Data.Ix(inRange)
 import qualified Grisette as G
@@ -47,7 +46,7 @@ import Data.String(fromString)
 import Control.Monad.Except(ExceptT(..), MonadError(..))
 import Data.Generics.Product (position)
 import Control.Monad.Extra(allM, andM)
-import Control.Monad(mapM_, zipWithM)
+import Control.Monad(zipWithM)
 import Data.Tuple.Extra(uncurry3)
 
 -- This data type represents the context under which to evaluate
@@ -138,28 +137,8 @@ verifyRegAccess m (RegisterAccess registerName@(WithContext name _) regIdx@(With
   & eitherFromPred (isAccessingValidReg regIdx) genInvalidAccessErr
   & fmap determineRegElemType
   where
-
     genInvalidAccessErr :: TermType -> TypeErrAt
     genInvalidAccessErr = const $ WithContext (InvalidRegAccess name num) lineNum
-
--- Takes two lists of the same length where they differ elementwise and
--- returns the index of the first elementwise difference between both lists
-findIdxOfFirstDiff :: Eq a => [a] -> [a] -> Int
-findIdxOfFirstDiff x = zipWith (/=) x >>> findIndex id >>> fromJust
-
--- Takes a collection of arguments passed to a gate
--- where one of them does not have the expected type,
--- the expected and actual types of the arguments to the
--- gate, and generates an error noting that the aforementioned
--- argument has the wrong type
-findTypeMismatch :: [Expression] -> [TermType] -> [TermType] -> TypeEvaluationError
-
-findTypeMismatch actualArgs expectedArgTypes actualArgTypes =
-  TypeMismatch{expectedType, actualType, erroneousTerm}
-  where
-    mismatchIdx = findIdxOfFirstDiff actualArgTypes expectedArgTypes
-    [expectedType, actualType] = map (!! mismatchIdx) [expectedArgTypes, actualArgTypes]
-    erroneousTerm = actualArgs !! mismatchIdx
 
 
 verifyGateApplication :: (LineNumber -> Int -> Int -> m TermType) -> ([TermType] -> [TermType] -> [Expression] -> LineNumber -> m TermType) -> LineNumber -> TermType -> [TermType] -> [Expression] -> m TermType
@@ -188,7 +167,7 @@ verifyGateApplication unexpectedNumOfParamsErrFn validAppCheckerFn line (Circuit
 -- if the expected types correspond to the actual types.
 -- Returns an error otherwise
 checkExpectedAndActualGateArgMatch :: [TermType] -> [TermType] -> [Expression] -> LineNumber -> TypeCalculationResult
-checkExpectedAndActualGateArgMatch expectedArgTypes  actualArgTypes actualArgs line = (zip3 expectedArgTypes actualArgTypes actualArgs & allM (uncurry3 isSupertypeOf)) $> Unit
+checkExpectedAndActualGateArgMatch expectedArgTypes actualArgTypes actualArgs line = (zip3 expectedArgTypes actualArgTypes actualArgs & mapM_ (uncurry3 isSupertypeOf)) $> Unit
   where
     isSupertypeOf :: TermType -> TermType -> Expression -> Either TypeErrAt Bool
     isSupertypeOf expectedTyp@(RegisterGroup collTy expectedNumOfRegs) actualTyp@(RegisterGroup collTy' actualNumOfRegs) actualRegColl = bool (toTypMisMatch expectedTyp actualTyp actualRegColl) (Right True) $ collTy == collTy' &&  expectedNumOfRegs <= actualNumOfRegs
