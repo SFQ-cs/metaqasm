@@ -191,6 +191,12 @@ verifyExpr m x@(RegisterAccess{}) = verifyRegAccess m x
 
 verifyExpr m (Var varName) = findTypeWithinScope varName m
 
+-- Takes a function for determining the type of a gate, another
+-- function for calculating the type of an expression, a function for
+-- checking that the application of a gate is valid, the context under
+-- which to evaluate the application, information about the gate, and
+-- returns the type of the gate application if possible. Returns
+-- an error otherwise
 verifyGateBody :: Monad m => (Id -> EvaluationContext -> m TermType) -> (EvaluationContext -> Expression -> m TermType) -> (LineNumber -> TermType -> [TermType] -> [Expression] -> m TermType) -> EvaluationContext -> GateApp -> m TermType
 
 verifyGateBody calcTypeOfGate calcExprType gateAppVerifier m (GateApp gateName@(WithContext _ line) args) =
