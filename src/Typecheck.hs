@@ -38,16 +38,15 @@ import Vary (Vary)
 import qualified Vary
 import Data.Function ((&), on)
 import Data.Functor(($>))
-import Data.List(findIndex, find, nub)
-import Data.Maybe(fromJust)
+import Data.List(find, nub)
 import qualified Control.Lens as L hiding (Control.Lens.Index)
 import Data.Ix(inRange)
 import qualified Grisette as G
 import Data.String(fromString)
 import Control.Monad.Except(ExceptT(..), MonadError(..))
 import Data.Generics.Product (position)
-import Control.Monad.Extra(allM)
-import Control.Monad(mapM_)
+import Control.Monad.Extra(allM, andM)
+import Control.Monad(zipWithM)
 import Data.Tuple.Extra(uncurry3)
 
 -- This data type represents the context under which to evaluate
@@ -138,40 +137,43 @@ verifyRegAccess m (RegisterAccess registerName@(WithContext name _) regIdx@(With
   & eitherFromPred (isAccessingValidReg regIdx) genInvalidAccessErr
   & fmap determineRegElemType
   where
-
     genInvalidAccessErr :: TermType -> TypeErrAt
     genInvalidAccessErr = const $ WithContext (InvalidRegAccess name num) lineNum
 
--- Takes two lists of the same length where they differ elementwise and
--- returns the index of the first elementwise difference between both lists
-findIdxOfFirstDiff :: Eq a => [a] -> [a] -> Int
-findIdxOfFirstDiff x = zipWith (/=) x >>> findIndex id >>> fromJust
 
--- Takes a collection of arguments passed to a gate
--- where one of them does not have the expected type,
--- the expected and actual types of the arguments to the
--- gate, and generates an error noting that the aforementioned
--- argument has the wrong type
-findTypeMismatch :: [Expression] -> [TermType] -> [TermType] -> TypeEvaluationError
+verifyGateApplication :: (LineNumber -> Int -> Int -> m TermType) -> ([TermType] -> [TermType] -> [Expression] -> LineNumber -> m TermType) -> LineNumber -> TermType -> [TermType] -> [Expression] -> m TermType
 
-findTypeMismatch actualArgs expectedArgTypes actualArgTypes =
-  TypeMismatch{expectedType, actualType, erroneousTerm}
+-- Takes a function for generating an error when the number of expected gate parameters does
+-- not match the actual number of parameters passed, a function that verifies that
+-- the expected arguments are supertypes of the actual passed arguments,
+-- the line the gate was applied, the expected and actual types, the
+-- arguments passed to the gate, and returns the type of the application
+-- if the number of expected/actual arguments match and the actual arguments
+-- are subtypes of the expected arguments. Returns an error otherwise
+verifyGateApplication unexpectedNumOfParamsErrFn validAppCheckerFn line (Circuit expectedArgTypes) actualArgTypes args
+  | gateIsAppliedToTooManyArgs = unexpectedNumOfArgsErr
+  | gateIsAppliedToTooFewArgs = unexpectedNumOfArgsErr
+  | otherwise = validAppCheckerFn expectedArgTypes actualArgTypes args line
   where
-    mismatchIdx = findIdxOfFirstDiff actualArgTypes expectedArgTypes
-    [expectedType, actualType] = map (!! mismatchIdx) [expectedArgTypes, actualArgTypes]
-    erroneousTerm = actualArgs !! mismatchIdx
+    numOfExpectedTypes = length expectedArgTypes
+    numOfActualTypes = length actualArgTypes
+    gateIsAppliedToTooManyArgs = numOfExpectedTypes < numOfActualTypes
+    gateIsAppliedToTooFewArgs = numOfExpectedTypes > numOfActualTypes
+    unexpectedNumOfArgsErr =  unexpectedNumOfParamsErrFn line numOfExpectedTypes numOfActualTypes
 
-
--- Takes the expected and actual argument types to a gate and
--- returns true if the expected types correspond to the actual types.
--- Returns false otherwise
-isValidGateApp :: [TermType] -> [TermType] -> Bool
-isValidGateApp expectedArgTypes  = zip expectedArgTypes >>> all (uncurry isSupertypeOf)
+-- Takes the expected and actual argument types to a gate, the
+-- actual arguments, the line the gate was applied,
+-- and returns the type of the application
+-- if the expected types correspond to the actual types.
+-- Returns an error otherwise
+checkExpectedAndActualGateArgMatch :: [TermType] -> [TermType] -> [Expression] -> LineNumber -> TypeCalculationResult
+checkExpectedAndActualGateArgMatch expectedArgTypes actualArgTypes actualArgs line = (zip3 expectedArgTypes actualArgTypes actualArgs & mapM_ (uncurry3 isSupertypeOf)) $> Unit
   where
-    isSupertypeOf :: TermType -> TermType -> Bool
-    isSupertypeOf (RegisterGroup collTy expectedNumOfRegs) (RegisterGroup collTy' actualNumOfRegs) = collTy == collTy' &&  expectedNumOfRegs <= actualNumOfRegs
-    isSupertypeOf (Circuit left) (Circuit right) = all id (zipWith isSupertypeOf right left)
-    isSupertypeOf x y = x == y
+    isSupertypeOf :: TermType -> TermType -> Expression -> Either TypeErrAt Bool
+    isSupertypeOf expectedTyp@(RegisterGroup collTy expectedNumOfRegs) actualTyp@(RegisterGroup collTy' actualNumOfRegs) actualRegColl = bool (toTypMisMatch expectedTyp actualTyp actualRegColl) (Right True) $ collTy == collTy' &&  expectedNumOfRegs <= actualNumOfRegs
+    isSupertypeOf (Circuit left) (Circuit right) args' = andM  (zipWithM isSupertypeOf right left args')
+    isSupertypeOf x y actualArg = bool (toTypMisMatch x y actualArg) (Right True) $  x == y
+    toTypMisMatch expectedTyp actualTyp actualArg = TypeMismatch expectedTyp actualTyp actualArg & flip toTypeErrAtLoc line
 
 -- Takes the line where a gate was applied,
 -- the types of the expected arguments for a gate,
@@ -180,19 +182,7 @@ isValidGateApp expectedArgTypes  = zip expectedArgTypes >>> all (uncurry isSuper
 -- expected and actual types match. Returns an error otherwise
 verifyGateArgs :: LineNumber -> TermType -> [TermType] -> [Expression] -> TypeCalculationResult
 
-verifyGateArgs line (Circuit expectedArgTypes) actualArgTypes args
-  | gateIsAppliedToTooManyArgs = unexpectedNumOfArgsErr
-  | gateIsAppliedToTooFewArgs = unexpectedNumOfArgsErr
-  | isValidGateApp expectedArgTypes actualArgTypes  = Right Unit
-  | otherwise = gateArgMismatchErr
-  where
-    numOfExpectedTypes = length expectedArgTypes
-    numOfActualTypes = length actualArgTypes
-    gateIsAppliedToTooManyArgs = numOfExpectedTypes < numOfActualTypes
-    gateIsAppliedToTooFewArgs = numOfExpectedTypes > numOfActualTypes
-    unexpectedNumOfArgsErr =  genUnexpectedNumOfArgsErr line numOfExpectedTypes numOfActualTypes
-    gateArgMismatchErr = toTypeErrAtLoc (findTypeMismatch args expectedArgTypes actualArgTypes) line
-
+verifyGateArgs = verifyGateApplication genUnexpectedNumOfArgsErr checkExpectedAndActualGateArgMatch
 
 -- Takes the current context, an expression, and calculates its type
 -- under the given context
@@ -201,16 +191,26 @@ verifyExpr m x@(RegisterAccess{}) = verifyRegAccess m x
 
 verifyExpr m (Var varName) = findTypeWithinScope varName m
 
+-- Takes a function for determining the type of a gate, another
+-- function for calculating the type of an expression, a function for
+-- checking that the application of a gate is valid, the context under
+-- which to evaluate the application, information about the gate, and
+-- returns the type of the gate application if possible. Returns
+-- an error otherwise
+verifyGateBody :: Monad m => (Id -> EvaluationContext -> m TermType) -> (EvaluationContext -> Expression -> m TermType) -> (LineNumber -> TermType -> [TermType] -> [Expression] -> m TermType) -> EvaluationContext -> GateApp -> m TermType
+
+verifyGateBody calcTypeOfGate calcExprType gateAppVerifier m (GateApp gateName@(WithContext _ line) args) =
+  do
+  expectedTypes <- calcTypeOfGate gateName m
+  actualTypes <- traverse (calcExprType m) args
+  gateAppVerifier line expectedTypes actualTypes args
+
 -- Takes the current context, the application of a gate, and
 -- verifies if the application is valid under the given context.
 -- Returns the type of the application if so. Returns an error otherwise.
 verifyGateApp :: EvaluationContext -> GateApp -> TypeCalculationResult
 
-verifyGateApp m (GateApp gateName@(WithContext _ line) args) = do
-  expectedTypes <- findGateType gateName m
-  actualTypes <- traverse (verifyExpr m) args
-  verifyGateArgs line expectedTypes actualTypes args
-  where
+verifyGateApp m gt@(GateApp{}) = verifyGateBody findGateType verifyExpr verifyGateArgs m gt
 
 verifyGateApp m (GateSequence a b)
   = verifyGateApp m a *> verifyGateApp m b
@@ -364,10 +364,10 @@ ensureM predicate errFn x = predicate x >>= bool (errFn x & throwError) (return 
 -- the index variables currently in-scope,
 -- a parametric expression, and returns the type of the expression if it is
 -- valid. Returns an error otherwise
-verifyParametricExpr :: EvaluationContext -> [IndexVar] -> Expression -> TypeCalculationResult'
-verifyParametricExpr m _ x@(Var{})  = verifyExpr' m x
+verifyParametricExpr :: [IndexVar] -> EvaluationContext ->  Expression -> TypeCalculationResult'
+verifyParametricExpr _ m x@(Var{})  = verifyExpr' m x
 
-verifyParametricExpr m validIdxVars (RegisterAccess registerName@(WithContext _ line) registerNumber)
+verifyParametricExpr validIdxVars m (RegisterAccess registerName@(WithContext _ line) registerNumber)
   = checkNoFreeIdxVarsAreUsed registerNumber validIdxVars
   *> findTypeWithinScope' registerName m
   >>= ensureM (isRegColl >>> return) (genExpectedRegCollErr registerName line)
@@ -448,38 +448,26 @@ proveValidityOfGateApp validIndexVars expectedTypes actualTypes actualArgs line 
     genRegCollMismatchErr :: LineNumber -> TermType -> TermType -> Expression -> G.Model -> TypeErrAt
     genRegCollMismatchErr gateAppLine expectedRegCollType@(RegisterGroup _ expectedNumOfRegs) actualRegCollType@(RegisterGroup _ actualNumOfRegs) erroneousTerm m = (ParametricTypeMismatch expectedRegCollType  actualRegCollType erroneousTerm `on` flip showIndexIsInvalid m) expectedNumOfRegs actualNumOfRegs & addContextTo gateAppLine
 
--- Takes the line where a gate was applied,
--- the types of the expected arguments for a gate,
--- the types of the actual arguments passed to the gate,
--- the arguments passed to the gate, and checks if the
--- expected and actual types match. Returns an error otherwise
-verifyParametricGateApp :: LineNumber -> [IndexVar] -> TermType -> [TermType] -> [Expression] -> TypeCalculationResult'
-verifyParametricGateApp line validIdxVars (Circuit expectedArgTypes) actualArgTypes actualArgs
-  | tooFewArgsHaveBeenPassed = numOfUnexpectedArgsErr
-  | tooManyArgsHaveBeenPassed = numOfUnexpectedArgsErr
-  | otherwise = proveValidityOfGateApp validIdxVars expectedArgTypes actualArgTypes actualArgs line 
+
+verifyParametricGateApp :: [IndexVar] -> LineNumber -> TermType -> [TermType] -> [Expression] -> TypeCalculationResult'
+
+verifyParametricGateApp validIdxVars = verifyGateApplication genUnexpectedNumOfArgsErr' (proveValidityOfGateApp validIdxVars)
   where
-    numOfExpectedArgs = length expectedArgTypes
-    numOfActualArgs = length actualArgTypes
-    tooFewArgsHaveBeenPassed = numOfExpectedArgs > numOfActualArgs
-    tooManyArgsHaveBeenPassed = numOfExpectedArgs < numOfActualArgs
-    numOfUnexpectedArgsErr  = genUnexpectedNumOfArgsErr line numOfExpectedArgs numOfActualArgs & fromEither
+    genUnexpectedNumOfArgsErr' line numOfExpectedArgs = genUnexpectedNumOfArgsErr line numOfExpectedArgs >>> fromEither
 
 -- Takes the in-scope index variables, the body of a gate within a parametric gate declaration,
 --  the context under which to evaluate the body, and returns an error if any part of the
 -- gate body has an invalid type. Returns the overall type of the gate otherwise
-verifyParametricGateBody ::[IndexVar] -> GateApp  -> EvaluationContext  -> TypeCalculationResult'
+verifyParametricGateBody ::[IndexVar] -> GateApp  ->  EvaluationContext  ->  TypeCalculationResult'
 
-verifyParametricGateBody validIdxVars GateApp{gateId, gateArgs} m = do
-  expectedTypes <- findGateType' gateId m
-  actualTypes <- traverse (verifyParametricExpr m validIdxVars) gateArgs
-  verifyParametricGateApp (extractCtx gateId) validIdxVars expectedTypes actualTypes gateArgs
+
+verifyParametricGateBody validIdxVars gt@(GateApp{}) m =
+  verifyGateBody findGateType' (verifyParametricExpr validIdxVars) (verifyParametricGateApp validIdxVars)  m gt
   where
     findGateType' a = findGateType a >>> fromEither
 
-verifyParametricGateBody validIdxVars (GateSequence fstGate sndGate) m =
-  verifyParametricGateBody validIdxVars fstGate m *> verifyParametricGateBody validIdxVars sndGate m
-
+verifyParametricGateBody validIdxVars  (GateSequence fstGate sndGate) m  =
+  verifyParametricGateBody validIdxVars fstGate m  *> verifyParametricGateBody validIdxVars sndGate m
 
 -- Takes a collection of index variables that can be used, an argument to a gate, and
 -- checks that the argument does not reference any free index variables
