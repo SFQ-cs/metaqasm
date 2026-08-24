@@ -452,24 +452,16 @@ verifyParametricGateApp validIdxVars = verifyGateApplication genUnexpectedNumOfA
 -- Takes the in-scope index variables, the body of a gate within a parametric gate declaration,
 --  the context under which to evaluate the body, and returns an error if any part of the
 -- gate body has an invalid type. Returns the overall type of the gate otherwise
-verifyParametricGateBody ::[IndexVar] -> GateApp  -> EvaluationContext  -> TypeCalculationResult'
+verifyParametricGateBody ::[IndexVar] -> GateApp  ->  EvaluationContext  ->  TypeCalculationResult'
 
 
-verifyParametricGateBody validIdxVars gt@(GateApp{}) m=
-  verifyGateBody findGateType' (verifyParametricExpr validIdxVars) (verifyParametricGateApp validIdxVars) m gt
+verifyParametricGateBody validIdxVars gt@(GateApp{}) m =
+  verifyGateBody findGateType' (verifyParametricExpr validIdxVars) (verifyParametricGateApp validIdxVars)  m gt
   where
     findGateType' a = findGateType a >>> fromEither
 
---verifyParametricGateBody validIdxVars GateApp{gateId, gateArgs} m = do
---  expectedTypes <- findGateType' gateId m
---  actualTypes <- traverse (verifyParametricExpr validIdxVars m) gateArgs
---  verifyParametricGateApp validIdxVars (extractCtx gateId) expectedTypes actualTypes gateArgs
---  where
---    findGateType' a = findGateType a >>> fromEither
-
-verifyParametricGateBody validIdxVars (GateSequence fstGate sndGate) m =
-  verifyParametricGateBody validIdxVars fstGate m *> verifyParametricGateBody validIdxVars sndGate m
-
+verifyParametricGateBody validIdxVars  (GateSequence fstGate sndGate) m  =
+  verifyParametricGateBody validIdxVars fstGate m  *> verifyParametricGateBody validIdxVars sndGate m
 
 -- Takes a collection of index variables that can be used, an argument to a gate, and
 -- checks that the argument does not reference any free index variables
