@@ -86,13 +86,12 @@ import Syntax(Identifier,
               WithContext(..),
               TermType(..),
               toConstIdx,
-              Index(..),
               Id,
               RegisterType(..))
 import Lexer(LineNumber(..))
 import Control.Arrow((&&&),
                      (>>>))
-import Test.QuickCheck.Instances.Tuple ((>**<), (>*<))
+import Test.QuickCheck.Instances.Tuple ((>**<), (>*<), (>***<))
 import Data.Function(on)
 import Typecheck(TypeEvaluationError(..))
 import Control.Monad(replicateM)
@@ -1250,3 +1249,34 @@ circuitFamWithGateAppToNonSubtypeElem = (mkGateTakeABiggerRegColl &&& extractSma
     toQbitRegColl = flip WithContext (LineNumber 1) >>> Var
     extractSndGateArg :: MetaQasmProgram -> Identifier
     extractSndGateArg = dropWhile (/= ':') >>> dropWhile (/= ',') >>> drop 2 >>> takeWhile (/= ':')
+
+-- Represents a gate that takes three arguments
+data ThreeArgGate = ThreeArgGate{_id' :: String, _fstArgName :: String, _sndArgName :: String, _thrdArgName :: String} deriving (Show)
+makeLenses ''ThreeArgGate
+
+threeArgGate :: Gen ThreeArgGate
+
+threeArgGate = ((>***<) freshVariable freshVariable freshVariable freshVariable) `suchThat` ((^.. each) >>> doesNotContainDuplicates) & fmap (uncurry4 ThreeArgGate)
+  where
+    uncurry4 :: (a -> b -> c -> d -> e) -> (a, b, c, d) -> e
+    uncurry4 f (x, y, z, w) = f x y z w
+
+-- Creates a gate declaration taking a circuit that expects
+-- a collection with two elements and a qubit and applies the
+-- circuit to a collection of size three and a bit
+gateDeclWithInvalidTwoParamGateApp :: Gen MetaQasmProgram
+gateDeclWithInvalidTwoParamGateApp = formatToString invalidDecl <$> threeArgGate
+  where
+    invalidDecl = threeParamGateDecl fstArgType sndArgType thrdArgType gateBody'
+    threeParamGateDecl :: MetaQasmProgramFormatter ThreeArgGate ->  MetaQasmProgramFormatter ThreeArgGate -> MetaQasmProgramFormatter ThreeArgGate -> MetaQasmProgramFormatter ThreeArgGate -> MetaQasmProgramFormatter ThreeArgGate 
+    threeParamGateDecl fstArgtypFmtter sndArgtypFmtter thrdArgtypFmtter gateBodyFmtter = fconst "gate" <%+> viewed id' string <> parenthesised (viewed fstArgName string `sepByColon` fstArgtypFmtter
+                                                                                                                             `sepByComma` viewed sndArgName string `sepByColon` sndArgtypFmtter
+                                                                                                                             `sepByComma` viewed thrdArgName string `sepByColon` thrdArgtypFmtter) <%+> braced gateBodyFmtter
+    fstArgType = circuitTypeAnnotation $ fconst "Qbit[2], Qbit"
+    sndArgType = fconst "Qbit[3]"
+    thrdArgType = fconst "Bit"
+    gateBody' = twoParamGateApp (viewed fstArgName string) (viewed sndArgName string) (viewed thrdArgName string)
+
+    circuitTypeAnnotation :: MetaQasmProgramFormatter a -> MetaQasmProgramFormatter a
+    circuitTypeAnnotation circuitTypes  = fconst "Circuit" <> parenthesised circuitTypes
+    
