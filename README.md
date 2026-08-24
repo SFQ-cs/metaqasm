@@ -89,7 +89,9 @@ for indices such as m * n
 
 ## Create a command line interface for typechecking programs
 
-The interface would be of the form `metaqasm fileName`
+To use the tool, one would type out `metaqasm fileName`, where the file contains MetaQASM code.
+The output should be the type of the program if it could be parsed and has a valid type.
+Otherwise, an error explaining why the program has an invalid type will be returned.
 
 # Miscellaneous
 
