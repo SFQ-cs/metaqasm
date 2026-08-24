@@ -671,6 +671,6 @@ spec =  do
   describe "Declaring a circuit family in which a gate is applied to a nonsubtype of the expected argument"  $ do
     runPropTenTimes "Is invalid"  circuitFamWithGateAppToNonSubtypeElem prop_cannotApplyGateTakingCollWithAtLeastThreeElemsToSmallerColl
 
-  describe "Applying a gate to two terms where the second term does not have the expected type"  $ do
-    runPropTenTimes "Is invalid"  gateDeclWithInvalidTwoParamGateApp prop_cannotSubstituteBitForQubit
-
+  describe "Applying a gate to a collection and a bit where the second term is expected to be a qubit"  $ do
+    prop "Is invalid" $ do
+      forAll gateDeclWithInvalidTwoParamGateApp prop_cannotSubstituteBitForQubit

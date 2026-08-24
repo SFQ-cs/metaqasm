@@ -1268,17 +1268,21 @@ threeArgGate = ((>***<) freshVariable freshVariable freshVariable freshVariable)
     uncurry4 :: (a -> b -> c -> d -> e) -> (a, b, c, d) -> e
     uncurry4 f (x, y, z, w) = f x y z w
 
-
 -- Creates pairs of invalid programs that apply a
--- gate expecting a qubit to a bit and the name of the bit
+-- gate expecting a collection and a qubit to a collection and a bit
+-- and the name of the bit
 gateDeclWithInvalidTwoParamGateApp :: Gen InvalidProgCausedByTerm
 gateDeclWithInvalidTwoParamGateApp = (formatToString invalidDecl &&& getBitName) <$> threeArgGate
   where
     invalidDecl = threeParamGateDecl fstArgType sndArgType thrdArgType gateBody'
     threeParamGateDecl :: MetaQasmProgramFormatter ThreeArgGate ->  MetaQasmProgramFormatter ThreeArgGate -> MetaQasmProgramFormatter ThreeArgGate -> MetaQasmProgramFormatter ThreeArgGate -> MetaQasmProgramFormatter ThreeArgGate
-    threeParamGateDecl fstArgtypFmtter sndArgtypFmtter thrdArgtypFmtter gateBodyFmtter = fconst "gate" <%+> viewed id' string <> parenthesised (viewed fstArgName string `sepByColon` fstArgtypFmtter
-                                                                                                                             `sepByComma` viewed sndArgName string `sepByColon` sndArgtypFmtter
-                                                                                                                             `sepByComma` viewed thrdArgName string `sepByColon` thrdArgtypFmtter) <%+> braced gateBodyFmtter
+    threeParamGateDecl fstArgtypFmtter sndArgtypFmtter thrdArgtypFmtter gateBodyFmtter =
+      fconst "gate"
+      <%+> viewed id' string
+      <> parenthesised (viewed fstArgName string `sepByColon` fstArgtypFmtter
+                        `sepByComma` viewed sndArgName string `sepByColon` sndArgtypFmtter
+                        `sepByComma` viewed thrdArgName string `sepByColon` thrdArgtypFmtter)
+      <%+> braced gateBodyFmtter
     fstArgType = circuitTypeAnnotation $ fconst "Qbit[2], Qbit"
     sndArgType = fconst "Qbit[3]"
     thrdArgType = fconst "Bit"
