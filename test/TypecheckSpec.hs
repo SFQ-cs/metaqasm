@@ -98,7 +98,8 @@ import Generators(outOfScopeVar,
                  circuitFamilyThatAppliesNAryGateToLessThanNArgs,
                  circuitFamilyThatAppliesOneQbitGateToTwoQbits,
                  circuitFamWithGateAppToSubtype,
-                 circuitFamWithGateAppToNonSubtypeElem)
+                 circuitFamWithGateAppToNonSubtypeElem,
+                 gateDeclWithInvalidTwoParamGateApp)
 import Data.Function(on, (&))
 
 -- This represents the possible errors in a metaQasm program, being
@@ -669,4 +670,7 @@ spec =  do
 
   describe "Declaring a circuit family in which a gate is applied to a nonsubtype of the expected argument"  $ do
     runPropTenTimes "Is invalid"  circuitFamWithGateAppToNonSubtypeElem prop_cannotApplyGateTakingCollWithAtLeastThreeElemsToSmallerColl
+
+  describe "Applying a gate to two terms where the second term does not have the expected type"  $ do
+    runPropTenTimes "Is invalid"  gateDeclWithInvalidTwoParamGateApp prop_cannotSubstituteBitForQubit
 
